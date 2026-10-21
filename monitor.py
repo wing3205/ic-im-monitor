@@ -470,7 +470,7 @@ def render_reports(history, requested_date, failures):
         text += '\n\n来源：中金所官方域名，本次使用 HTTP 回退。'
     url = publish_url(os.getenv('REPORT_BASE_URL', '').strip())
     if url:
-        text += f'\n\n[查看一年走势图与完整报告]({url})\n\n![IC/IM走势图]({url}quarter_spread.png)'
+        text += f'\n\n[查看一年走势图与完整报告]({url}?date={latest})\n\n![IC/IM走势图]({url}quarter_spread.png?date={latest})'
     if latest != requested_date.isoformat():
         text = f'截至 {latest} 的历史报告；请求日期 {requested_date} 没有新的完整行情。\n\n' + text
     make_chart(display_history)
