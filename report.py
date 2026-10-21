@@ -6,24 +6,42 @@ import re
 from pathlib import Path
 
 
-def write_report(history, message, missing, failures, requested_date, output_dir, quotes=None):
-    from monitor import series_for, statistics, reference_view, CALENDAR
+def write_report(history, message, missing, failures, requested_date, output_dir, quotes=None, quote_history=None):
+    from monitor import series_for, statistics, reference_view, learning_notes, CALENDAR
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     latest = max(r['date'] for r in history)
     display_history=reference_view(history)
     rows = sorted((r for r in display_history if r['date'] == latest), key=lambda r: r['product'])
     series = {p: series_for(display_history, p) for p in ('IC', 'IM')}
+    analytics, lessons = {}, {}
+    for basis, records in [('reference', display_history), ('nearest', history)]:
+        analytics[basis], lessons[basis] = {}, {}
+        for r in records:
+            if r['date'] != latest:
+                continue
+            stats = statistics(r, records, quote_history)
+            analytics[basis][r['product']] = {k: stats[k] for k in ('pair', 'rolling')}
+            lessons[basis][r['product']] = learning_notes(r, records, stats=stats)
     cards = []
     for r in rows:
-        stats = statistics(r, display_history)
-        percentile = stats['percentile']
+        stats = analytics['reference'][r['product']]
+        percentile = stats['pair']['percentile']
         ptext = f'{percentile:.0f}%' if percentile is not None else '样本不足'
+        rolling = stats['rolling']
+        rtext = f'{rolling["percentile"]:.0f}%' if rolling['percentile'] is not None else '样本不足'
+        window = (f'{rolling["start"] or "无"} 至 {rolling["end"] or "无"} · {rolling["count"]} 次此前观测')
         cards.append(f'''<section class="metric {r['product'].lower()}">
           <div class="metric-top"><strong>{html.escape(r['product'])}</strong><span data-pair="{r['product']}">{html.escape(r['near'])} → {html.escape(r['far'])}</span></div>
           <div class="number"><span data-value="{r['product']}">{float(r['annualized_pct']):+.2f}</span><small>%</small></div>
-          <div class="metric-bottom"><span>年化跨期价差</span><span>同组历史深度分位 <b data-percentile="{r['product']}">{ptext}</b></span></div>
+          <div class="metric-bottom"><span>年化跨期价差</span><span>滚动365日深度分位 <b data-rolling="{r['product']}">{rtext}</b></span></div>
+          <div class="subtle">同组深度分位 <b data-percentile="{r['product']}">{ptext}</b> · <span data-count="{r['product']}">{stats['pair']['count']}</span> 次</div>
+          <div class="sample-window" data-window="{r['product']}">{window}</div>
+          <div class="sample-window" data-pair-window="{r['product']}">同组样本：{stats['pair']['start'] or '无'} 至 {stats['pair']['end'] or '无'}</div>
         </section>''')
+    learning_html = ''.join('<details open><summary>'+html.escape(p)+'｜学习解说</summary>'+
+        ''.join('<p><strong>'+html.escape(n['title'])+'：</strong>'+html.escape(n['text'])+'</p>'
+                for n in lessons['reference'].get(p, []))+'</details>' for p in ('IC', 'IM'))
     days = sorted({r['date'] for r in history})
     requested = requested_date.isoformat()
     stale = requested != latest
@@ -48,13 +66,13 @@ def write_report(history, message, missing, failures, requested_date, output_dir
     term_table = ''.join(term_rows) or '<tr><td colspan="5">此日期没有完整行情快照，请重新补录。</td></tr>'
     # JSON inside an HTML script element must escape '<', even for imported CSV values.
     payload = json.dumps({'series': series,'nearSeries':{p:series_for(history,p) for p in ('IC','IM')},
-        'percentiles':{basis:{r['product']:statistics(r,h)['percentile'] for r in h if r['date']==latest}
-                       for basis,h in [('reference',display_history),('nearest',history)]},
+        'analytics':analytics, 'lessons':lessons,
         'rawHistory':history,'latest': latest}, ensure_ascii=False).replace('<', '\\u003c')
     missing_text = '、'.join(missing) if missing else '当前覆盖区间内未发现缺失交易日。'
     failure_text = '；'.join(f"{x['date']}：{x['error']}" for x in failures) or '本次无请求失败。'
     page = TEMPLATE.replace('__LATEST__', html.escape(latest)).replace('__NOTICE__', html.escape(notice))
     page = page.replace('__CARDS__', ''.join(cards)).replace('__PAYLOAD__', payload)
+    page = page.replace('__LESSONS__', learning_html)
     page = page.replace('__SUMMARY__', html.escape(f'{days[0]} 至 {latest} · {len(days)} 个交易日 · 缺失 {len(missing)} 日'))
     page = page.replace('__DETAILS__', details).replace('__MISSING__', html.escape(missing_text))
     page = page.replace('__FAILURES__', html.escape(failure_text))
@@ -80,6 +98,7 @@ main{max-width:1040px;padding:40px 36px 70px;margin:auto}header{border-top:5px s
 .metric{padding:20px 22px 18px 0}.metric+.metric{border-left:1px solid var(--line);padding-left:26px}.metric-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted)}.metric-top strong{font-size:22px;color:var(--ink)}
 .number{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:52px;line-height:1.5;letter-spacing:-.06em;font-variant-numeric:tabular-nums}.number small{font-size:24px;margin-left:4px}.ic .number{color:var(--ic)}.im .number{color:var(--im)}
 .metric-bottom{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;font-size:12px;color:var(--muted)}
+.sample-window{font-size:11px;color:var(--muted);margin-top:8px;overflow-wrap:anywhere}
 .section-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.ranges{display:flex;gap:4px}button{font:inherit;font-size:12px;padding:5px 10px;background:transparent;border:1px solid var(--line);border-radius:4px;color:var(--ink);cursor:pointer;min-height:36px}button[aria-pressed=true]{background:var(--ink);color:white;border-color:var(--ink)}button:active{transform:translateY(1px)}button:focus-visible,a:focus-visible,select:focus-visible{outline:2px solid var(--im);outline-offset:3px}
 select{font:inherit;font-size:13px;max-width:100%;padding:6px;border:1px solid var(--line);background:white;color:var(--ink)}.legend{display:flex;gap:18px;align-items:center;font-size:12px;margin:10px 0;color:var(--muted)}.legend i{display:inline-block;width:18px;height:3px;margin-right:5px;vertical-align:middle}
 .chart{background:#fff;border:1px solid var(--line);padding:10px 8px 4px;overflow:hidden}.chart svg{display:block;width:100%;height:auto;touch-action:pan-y}.chart-note{font-size:12px;color:var(--muted);margin:8px 0 26px}.readout{font:12px/1.7 ui-monospace,SFMono-Regular,monospace;min-height:44px;padding:7px 12px;background:#eeefe9;overflow-wrap:anywhere}
@@ -91,19 +110,21 @@ details{border-bottom:1px solid var(--line);padding:14px 0}summary{cursor:pointe
 <header><div class="eyebrow">INDEX FUTURES / DAILY OBSERVATORY</div><h1>IC / IM 贴水观察</h1>
 <div class="meta">交易日 __LATEST__ · 中金所盘后收盘价</div><div class="notice subtle">__NOTICE__</div></header>
 <div class="metrics">__CARDS__</div>
+<p class="subtle">深度分位越高，折价相对所选历史越深。滚动365日比较同一选约规则下的不同合约组；同组只比较相同两张合约。均排除当天，至少20次才显示；未按期限与季节校准，分位不是胜率。</p>
 <section><div class="section-top"><h2>季度价差的历史位置</h2><div class="ranges" aria-label="选择图表区间">
 <button type="button" data-days="30" aria-pressed="false">1个月</button><button type="button" data-days="180" aria-pressed="false">半年</button><button type="button" data-days="365" aria-pressed="true">1年</button><button type="button" data-days="0" aria-pressed="false">全部</button></div></div>
 <p class="subtle"><label for="basis">指标口径：</label><select id="basis"><option value="reference">挂牌远端季月（文章对照）</option><option value="nearest">最近两个季月（辅助）</option></select></p><div class="legend"><span><i style="background:var(--ic)"></i>IC 中证500</span><span><i style="background:var(--im)"></i>IM 中证1000</span><span>单位：%</span></div>
 <div class="chart"><svg id="chart" viewBox="0 0 900 360" role="img" aria-label="IC和IM年化跨期价差历史走势图"></svg><div id="readout" class="readout" aria-live="polite">点击图线查看日期与合约。</div></div>
 <div class="chart-note">负值更低表示远季折价更深。断线表示合约组切换或缺失交易日；不跨断点推断涨跌。<br>__SUMMARY__</div></section>
+<section class="section"><h2>新手学习与模拟</h2><p class="subtle">规则解说，未调用 AI API。围绕数据解释和纸面练习，不读取个人账户。</p><div id="lessons">__LESSONS__</div></section>
 <section class="section"><div class="section-top"><h2>最近的每日记录</h2><button type="button" id="download">下载完整 CSV</button></div>
 <div class="scroll"><table><thead><tr><th>交易日</th><th>IC 年化</th><th>IM 年化</th><th>IC 合约组</th><th>IM 合约组</th></tr></thead><tbody id="records"></tbody></table></div></section>
 <section class="section"><h2>各到期月份的价格与流动性</h2><div class="scroll"><table><thead><tr><th>合约</th><th>收盘价</th><th>成交量（手）</th><th>持仓量（手）</th><th>最近合约减本合约（点）</th></tr></thead><tbody>__TERM__</tbody></table></div><p class="subtle">价差按盘后价格计算；实际换仓还需买卖盘、手续费和持仓方向。每点对应200元/手，表内点差未扣成本。</p></section>
 <section class="section"><h2>解释与数据核查</h2>
-<details open><summary>今日观察与计算说明</summary>__DETAILS__</details>
+<details><summary>今日完整记录与计算说明（文章对照口径）</summary>__DETAILS__</details>
 <details><summary>缺失交易日</summary><p>__MISSING__</p></details>
 <details><summary>本次请求失败记录</summary><p>__FAILURES__</p></details>
-<details><summary>口径与边界</summary><p>默认文章对照口径选择挂牌最远两个连续季月；辅助口径选择最近两个有效季月。合约月份重合时二者相同，临近月度到期后可能不同。<br>年化跨期价差 =（下季收盘价 / 当季收盘价 − 1）× 4 × 100%。这是两张期货合约之间的季度斜率，不是现货基差，也不是账户年收益。</p><p>分位使用此前最多90次同组合约观测，至少20次才显示，不含当前值。样本会受剩余期限和季节因素影响；观察阈值尚未回测。</p><p>__CALENDAR__</p><p>未读取个人持仓、实时买卖盘和实际费用。多头、空头套保及跨期交易的判断不同，请勿将通用观察直接当成下单指令。</p></details></section>
+<details><summary>口径与边界</summary><p>默认文章对照口径选择挂牌最远两个连续季月；辅助口径选择最近两个有效季月。合约月份重合时二者相同，临近月度到期后可能不同。<br>年化跨期价差 =（远季收盘价 / 近季收盘价 − 1）× 4 × 100%。这是两张期货合约之间的季度斜率，不是现货基差，也不是账户年收益。</p><p>同组分位使用此前最多90次相同两张合约观测，从已选指标及完整报价快照还原，每日最多一次；滚动365日分位使用此前365个自然日内同一选约规则的每日指标，包含不同合约组。两者均不含当前值，至少20次才显示，不插值。深度分位 = 此前价差年化值大于等于当前值的次数 / 此前有效次数。样本有时间相关性，未按剩余期限、季节和市场状态校准；观察阈值尚未回测，滚动分位不触发买卖建议。</p><p>__CALENDAR__</p><p>未读取个人持仓、实时买卖盘和实际费用。当前为学习与模拟模式；多头、空头套保及跨期交易的判断不同。</p><p>交易制度依据：<a href="http://www.cffex.com.cn/cn/zz500.html">IC合约表</a>、<a href="http://www.cffex.com.cn/cn/ssxz/20220718/43093.html">IM交易细则</a>；概念参考：<a href="http://www.cffex.com.cn/cn/jysdt/20131126/17440.html">中金所升贴水教育文章</a>（历史教育材料，非当前行情依据）。</p></details></section>
 <footer>数据来源：<a href="https://www.cffex.com.cn/">中国金融期货交易所</a>。历史为具体月份合约，不使用主力连续价格拼接。<br>本页为生成时的静态快照，请先检查顶部交易日期。数据和图表内嵌，可离线查看。</footer>
 </main><script type="application/json" id="data">__PAYLOAD__</script><script>
 'use strict';
@@ -125,6 +146,7 @@ document.getElementById('readout').textContent='截至 '+data.latest+' ｜ '+['I
 document.querySelectorAll('[data-days]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-days]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));draw(Number(b.dataset.days));}));draw(365);
 function table(){document.getElementById("records").replaceChildren();const byDate=new Map;for(const[p,rows]of Object.entries(activeSeries))for(const r of rows){if(!byDate.has(r.date))byDate.set(r.date,{});byDate.get(r.date)[p]=r;}
 for(const date of [...byDate.keys()].sort().reverse().slice(0,15)){const row=byDate.get(date),tr=document.createElement('tr');tr.innerHTML='<td>'+esc(date)+'</td>'+['IC','IM'].map(p=>'<td>'+esc(row[p]?format(row[p].annualized_pct):'缺失')+'</td>').join('')+['IC','IM'].map(p=>'<td>'+esc(row[p]?row[p].near+'/'+row[p].far:'缺失')+'</td>').join('');document.getElementById('records').appendChild(tr);}}table();
-document.getElementById('basis').addEventListener('change',e=>{basis=e.target.value;activeSeries=basis==='reference'?data.series:data.nearSeries;for(const p of ['IC','IM']){const r=activeSeries[p].at(-1);if(!r)continue;document.querySelector('[data-pair="'+p+'"]').textContent=r.near+' → '+r.far;document.querySelector('[data-value="'+p+'"]').textContent=Number(r.annualized_pct).toFixed(2);const percentile=data.percentiles[basis][p];document.querySelector('[data-percentile="'+p+'"]').textContent=percentile===null?'样本不足':percentile.toFixed(0)+'%';}draw(range);table();});
+document.getElementById('basis').addEventListener('change',e=>{basis=e.target.value;activeSeries=basis==='reference'?data.series:data.nearSeries;for(const p of ['IC','IM']){const r=activeSeries[p].at(-1);if(!r)continue;document.querySelector('[data-pair="'+p+'"]').textContent=r.near+' → '+r.far;document.querySelector('[data-value="'+p+'"]').textContent=Number(r.annualized_pct).toFixed(2);const stats=data.analytics[basis][p],pair=stats.pair,roll=stats.rolling;document.querySelector('[data-percentile="'+p+'"]').textContent=pair.percentile===null?'样本不足':pair.percentile.toFixed(0)+'%';document.querySelector('[data-count="'+p+'"]').textContent=pair.count;document.querySelector('[data-rolling="'+p+'"]').textContent=roll.percentile===null?'样本不足':roll.percentile.toFixed(0)+'%';document.querySelector('[data-window="'+p+'"]').textContent=(roll.start||'无')+' 至 '+(roll.end||'无')+' · '+roll.count+' 次此前观测';}const lessons=document.getElementById('lessons');lessons.replaceChildren();for(const p of ['IC','IM']){const detail=document.createElement('details'),summary=document.createElement('summary');detail.open=true;summary.textContent=p+'｜学习解说';detail.appendChild(summary);for(const note of data.lessons[basis][p]||[]){const paragraph=document.createElement('p'),title=document.createElement('strong');title.textContent=note.title+'：';paragraph.appendChild(title);paragraph.appendChild(document.createTextNode(note.text));detail.appendChild(paragraph);}lessons.appendChild(detail);}draw(range);table();});
 document.getElementById('download').addEventListener('click',()=>{const rows=data.rawHistory.slice().sort((a,b)=>(a.date+a.product).localeCompare(b.date+b.product)),fields=['date','product','near','far','near_close','far_close','annualized_pct','reference_near','reference_far','reference_annualized_pct','near_volume','far_volume'];const cell=v=>'"'+String(v??'').replace(/"/g,'""')+'"';const csv='\ufeff'+[fields,...rows.map(r=>fields.map(k=>r[k]))].map(r=>r.map(cell).join(',')).join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download='ic-im-history-'+data.latest+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+document.getElementById('basis').addEventListener('change',()=>{for(const p of ['IC','IM']){const pair=data.analytics[basis][p].pair;document.querySelector('[data-pair-window="'+p+'"]').textContent='同组样本：'+(pair.start||'无')+' 至 '+(pair.end||'无');}});
 </script></body></html>'''

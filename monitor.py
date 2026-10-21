@@ -259,20 +259,96 @@ def write_history(old, new):
     return ordered
 
 
-def statistics(r, history):
-    rows = sorted((x for x in history if x['product'] == r['product'] and x['date'] < r['date']),
-                  key=lambda x: x['date'])
+def sample_summary(rows, value):
+    return dict(count=len(rows), start=rows[0]['date'] if rows else None,
+                end=rows[-1]['date'] if rows else None,
+                percentile=(100 * sum(as_float(x['annualized_pct']) >= value for x in rows) / len(rows)
+                            if len(rows) >= 20 else None))
+
+
+def statistics(r, history, quote_history=None):
+    # The selected daily series supplies the previous value and the rolling context.
+    by_date = {x['date']: x for x in history
+               if x['product'] == r['product'] and x['date'] < r['date']}
+    rows = [by_date[d] for d in sorted(by_date)]
     previous = rows[-1] if rows else None
-    same = [x for x in rows if (x['near'], x['far']) == (r['near'], r['far'])][-90:]
-    a = float(r['annualized_pct'])
-    # 分位只使用此前样本，避免把当前值当成自己的历史基准。
-    percentile = (100 * sum(float(x['annualized_pct']) >= a for x in same) / len(same)
-                  if len(same) >= 20 else None)
-    return dict(previous=previous, same=same, percentile=percentile)
+    same_by_date = {x['date']: x for x in rows if (x['near'], x['far']) == (r['near'], r['far'])}
+    # A pair may have traded before the selection rule started displaying it.
+    # Canonical snapshots override derived indicator rows, one observation per date.
+    for day, quotes in (quote_history or {}).items():
+        dt.date.fromisoformat(day)
+        if day >= r['date']:
+            continue
+        pair = [q for q in quotes if q.get('symbol') in (r['near'], r['far'])]
+        if not pair:
+            continue
+        same_by_date.pop(day, None)
+        if len(pair) != 2 or {q['symbol'] for q in pair} != {r['near'], r['far']}:
+            continue
+        try:
+            if any(as_float(q.get('close')) <= 0 or as_float(q.get('volume', 0)) <= 0 for q in pair):
+                continue
+            prices = {q['symbol']: as_float(q['close']) for q in pair}
+        except (TypeError, ValueError):
+            continue
+        same_by_date[day] = dict(date=day, product=r['product'], near=r['near'], far=r['far'],
+                                annualized_pct=round((prices[r['far']] / prices[r['near']] - 1) * 400, 4))
+    same = [same_by_date[d] for d in sorted(same_by_date)][-90:]
+    a = as_float(r['annualized_pct'])
+    pair_summary = sample_summary(same, a)
+    cutoff = (dt.date.fromisoformat(r['date']) - dt.timedelta(days=365)).isoformat()
+    rolling = sample_summary([x for x in rows if x['date'] >= cutoff], a)
+    rolling['window_start'] = cutoff
+    return dict(previous=previous, same=same, percentile=pair_summary['percentile'],
+                pair=pair_summary, rolling=rolling)
 
 
-def describe(r, history):
-    stats = statistics(r, history)
+def learning_notes(r, history, quote_history=None, stats=None):
+    stats = stats if stats is not None else statistics(r, history, quote_history)
+    a = as_float(r['annualized_pct'])
+    previous = stats['previous']
+    if previous and (previous['near'], previous['far']) == (r['near'], r['far']):
+        delta = a - as_float(previous['annualized_pct'])
+        old_value = as_float(previous['annualized_pct'])
+        if delta > 0:
+            direction = '远季相对近季变贵，' + ('折价变浅' if a < 0 else
+                         '由折价转为平价或升水' if old_value < 0 else '升水扩大')
+        elif delta < 0:
+            direction = '远季相对近季变便宜，' + ('升水收窄' if a > 0 else
+                         '由升水转为平价或折价' if old_value > 0 else '折价加深')
+        else:
+            direction = '跨期比值基本不变'
+        change = f'较 {previous["date"]} 变化 {delta:+.2f} 个百分点：{direction}。'
+    elif previous:
+        change = '本次合约组已切换，换组前后的变化不能直接解释为市场涨跌。'
+    else:
+        change = '暂无同口径的此前记录可比较。'
+    relation = ('远季价格低于近季' if a < 0 else '远季价格高于近季' if a > 0 else '远季与近季价格相同')
+    rolling = stats['rolling']
+    if rolling['percentile'] is None:
+        position = f'滚动365日只有 {rolling["count"]} 个此前样本，至少20个才显示排名。'
+    else:
+        position = (f'滚动365日深度分位 {rolling["percentile"]:.0f}%（{rolling["count"]}次）；'
+                    '数字越高，表示折价相对该品种自身历史越深，不代表盈利概率。')
+    position += (f' 同组合约有 {stats["pair"]["count"]} 个此前样本；'
+                 + ('暂不足20个，不能给出同组分位。' if stats['percentile'] is None else
+                    f'同组深度分位 {stats["percentile"]:.0f}%。'))
+    position += ' 两类排名的比较基准不同，均未按剩余期限、季度和市场状态校准。'
+    nominal = as_float(r['near_close']) * 200
+    return [
+        dict(title='今天的数据怎么读', text=f'{relation}。{change}跨期价差描述相对价格，不能单独判断指数涨跌。'),
+        dict(title='历史位置怎么读', text=position),
+        dict(title='今天的模拟练习', text=(f'暂未持仓，先做模拟记录：{r["near"]}/{r["far"]} 的价差 '
+             f'{as_float(r["spread_points"]):+.1f} 点；下一交易日仅在同组内比较变化，换组另记。'
+             '纸面换仓还应单列买卖价差、手续费和资金占用；当前分位本身不足以形成开仓结论。')),
+        dict(title='一手意味着什么', text=(f'{r["near"]} 按收盘价计算，一手名义价值约 {nominal:,.0f} 元；'
+             '一手发生100点不利变动，价格损失为20,000元，未计费用。保证金不是最大可能损失。'
+             f'年化跨期价差 {a:+.2f}% 是近远季比价的年化表达，不能当作账户年收益。')),
+    ]
+
+
+def describe(r, history, quote_history=None):
+    stats = statistics(r, history, quote_history)
     previous = stats['previous']
     a = float(r['annualized_pct'])
     if previous is None:
@@ -286,29 +362,36 @@ def describe(r, history):
     percentile = stats['percentile']
     ptxt = (f'此前同组合约 {len(stats["same"])} 次观测，折价深度分位 {percentile:.0f}%'
             if percentile is not None else f'此前同组合约只有 {len(stats["same"])} 个样本，暂不生成分位')
+    ptxt += f'；样本区间 {stats["pair"]["start"] or "无"} 至 {stats["pair"]["end"] or "无"}'
     days = (dt.date.fromisoformat(r['near_expiry'])-dt.date.fromisoformat(r['date'])).days
-    observation = '样本不足，先观察，等待可比较的历史积累。'
+    rolling = stats['rolling']
+    rolling_text = (f'过去365日滚动口径深度分位 {rolling["percentile"]:.0f}%，'
+                    if rolling['percentile'] is not None else '过去365日滚动口径样本不足，')
+    rolling_text += (f'{rolling["count"]} 次此前观测（{rolling["start"] or "无"} 至 '
+                     f'{rolling["end"] or "无"}）；不同具体合约，未按期限校准')
+    observation = '学习模式：先做模拟记录，分位不足时保留未知，不据此开仓。'
     if percentile is not None:
         if a >= 0:
             observation = '当前远季未折价，不能把历史分位解释为贴水收益。'
         elif percentile >= 80:
-            observation = '远季折价处于同组历史较深区域，可列入多头滚仓候选，需核验实际持仓与目标合约价差。'
+            observation = '远季折价处于同组历史较深区域，适合记录后续相对价差变化，不能直接推导买入结论。'
         elif percentile <= 20:
-            observation = '远季折价处于同组历史较浅区域，多头可继续比较近月持有与远月换仓成本。'
+            observation = '远季折价处于同组历史较浅区域，可在纸面上比较近月与远月换仓成本。'
         else:
             observation = '远季折价处于同组历史中间区域，暂未触发深浅分位观察条件。'
     if days <= 7:
-        observation += f' 当季距到期 {days} 个自然日，优先核查到期安排。'
+        observation += f' 近季距到期 {days} 个自然日，优先核查到期安排。'
     return '\n'.join([
         f'### {r["product"]}｜{r["near"]} → {r["far"]}',
-        f'- 当季收盘 **{float(r["near_close"]):.1f}**，下季 **{float(r["far_close"]):.1f}**',
+        f'- 近季收盘 **{float(r["near_close"]):.1f}**，远季 **{float(r["far_close"]):.1f}**',
         f'- 年化跨期价差：**{a:+.2f}%**；{comparison}',
-        f'- 当季减下季：{float(r["spread_points"]):+.1f}点；日历日年化近似 {float(r["daycount_annualized_pct"]):+.2f}%',
+        f'- 近季减远季：{float(r["spread_points"]):+.1f}点；日历日年化近似 {float(r["daycount_annualized_pct"]):+.2f}%',
         f'- {ptxt}（描述性统计，未按剩余期限校准）',
-        f'- 当季/下季成交量 {r["near_volume"]}/{r["far_volume"]}手；持仓量 {r["near_open_interest"]}/{r["far_open_interest"]}手',
+        f'- {rolling_text}',
+        f'- 近季/远季成交量 {r["near_volume"]}/{r["far_volume"]}手；持仓量 {r["near_open_interest"]}/{r["far_open_interest"]}手',
         f'- 最近两个有效合约：{r["front"]} {r["front_close"]} / {r["next"]} {r["next_close"]}',
         f'- 观察：{observation}',
-    ])
+    ] + [f'- {note["title"]}：{note["text"]}' for note in learning_notes(r, history, stats=stats)])
 
 
 def series_for(history, product):
@@ -451,9 +534,15 @@ def render_reports(history, requested_date, failures):
     rows = [r for r in display_history if r['date'] == latest]
     if {r['product'] for r in rows} != {'IC','IM'}:
         raise ValueError('缺少文章对照口径，请用行情缓存补录重算')
+    quote_history = {}
+    for day in dates:
+        quotes = load_quotes(dt.date.fromisoformat(day))
+        if quotes is not None:
+            quote_history[day] = quotes
     text = (f'交易日：{latest}；期货盘后收盘价，非实时行情。\n\n'
+            '新手学习与模拟模式｜规则解说，未调用 AI API。\n\n'
             '口径：挂牌最远两个连续季月，作为文章对照；以下始终注明合约。\n\n' +
-            '\n\n'.join(describe(r, display_history) for r in rows))
+            '\n\n'.join(describe(r, display_history, quote_history) for r in rows))
     text += '\n\n近端季月辅助：'+'；'.join(
         f'{r["product"]} {r["near"]}/{r["far"]} {float(r["annualized_pct"]):+.2f}%'
         for r in history if r['date']==latest)
@@ -461,8 +550,9 @@ def render_reports(history, requested_date, failures):
                 for n in range((dt.date.fromisoformat(latest)-dt.date.fromisoformat(dates[0])).days+1)]
     missing = [d.isoformat() for d in all_days if is_trading_day(d) and d.isoformat() not in dates]
     text += (f'\n\n历史覆盖：{dates[0]} 至 {latest}，{len(dates)} 个交易日；区间内缺失 {len(missing)} 日。'
-             '\n\n公式：（下季/当季−1）×4。折价更深不等于账户获利，跨季指标不等于实际换月价差。'
-             '分位只作观察，80%/20%为未回测的观察阈值。本报告未配置个人持仓，不形成个人交易指令。')
+             '\n\n公式：（远季/近季−1）×4。折价更深不等于账户获利，跨季指标不等于实际换月价差。'
+             '同组与滚动分位分别标注，至少20个此前样本才显示，滚动分位不作为买卖触发器。'
+             '80%/20%为同组未回测观察阈值。本报告用于学习模拟，未配置个人持仓。')
     if failures:
         text += '\n\n数据提示：部分请求失败，详细日期见报告。'
     if any('http://' in q.get('source_url', '') for r in rows
@@ -475,7 +565,7 @@ def render_reports(history, requested_date, failures):
         text = f'截至 {latest} 的历史报告；请求日期 {requested_date} 没有新的完整行情。\n\n' + text
     make_chart(display_history)
     write_report(history, text, missing, failures, requested_date, BASE / 'output',
-                 load_quotes(dt.date.fromisoformat(latest)))
+                 load_quotes(dt.date.fromisoformat(latest)), quote_history=quote_history)
     (BASE / 'output' / 'notification.md').write_text(text, encoding='utf-8')
     return latest, text
 

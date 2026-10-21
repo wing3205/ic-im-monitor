@@ -149,6 +149,56 @@ class TestPersistenceAndNotifications(unittest.TestCase):
 
 
 class TestCalendarAndStatistics(unittest.TestCase):
+    def test_pair_samples_include_quotes_before_pair_was_selected(self):
+        base=dict(product='IC',near='IC2612',far='IC2703',annualized_pct=-10)
+        current=dict(base,date='2026-10-21')
+        snapshots={(dt.date(2026,7,20)+dt.timedelta(days=i)).isoformat():[
+            dict(symbol='IC2612',close=6000,volume=10),
+            dict(symbol='IC2703',close=5925,volume=10)] for i in range(25)}
+        # Current and future quotes must never enter the historical denominator.
+        snapshots['2026-10-21']=[dict(symbol='IC2612',close=6000,volume=10),
+                                 dict(symbol='IC2703',close=5000,volume=10)]
+        snapshots['2026-10-22']=snapshots['2026-10-21']
+        selected=[dict(base,date='2026-07-20',annualized_pct=-30)]
+        s=monitor.statistics(current,selected+[current],snapshots)
+        self.assertEqual(len(s['same']),25)
+        self.assertEqual(s['percentile'],100)
+        self.assertEqual(s['same'][0]['annualized_pct'],-5)
+
+    def test_rolling_window_is_separate_from_exact_pair(self):
+        base=dict(product='IC',near='IC2609',far='IC2612',annualized_pct=-5)
+        current=dict(base,date='2026-10-21',near='IC2703',far='IC2706',annualized_pct=-10)
+        rows=[dict(base,date=(dt.date(2025,10,21)+dt.timedelta(days=i)).isoformat(),
+                   annualized_pct=-5 if i<10 else -15) for i in range(20)]
+        rows += [dict(base,date='2025-10-20'),current,dict(current,date='2026-10-22'),
+                 dict(base,date='2026-10-20',product='IM')]
+        s=monitor.statistics(current,rows,{})
+        self.assertEqual(len(s['same']),0)
+        self.assertIsNone(s['percentile'])
+        self.assertEqual(s['rolling']['count'],20)
+        self.assertEqual(s['rolling']['percentile'],50)
+        self.assertEqual(s['rolling']['start'],'2025-10-21')
+
+    def test_invalid_or_ambiguous_pair_quotes_do_not_add_samples(self):
+        r=dict(product='IC',near='IC2612',far='IC2703',annualized_pct=-10,date='2026-10-21')
+        good=[dict(symbol='IC2612',close=6000,volume=10),dict(symbol='IC2703',close=5925,volume=10)]
+        snapshots={'2026-10-16':good,'2026-10-19':good+[good[0]],
+                   '2026-10-20':[good[0],dict(good[1],volume=0)],
+                   '2026-10-15':[good[0],dict(good[1],close=float('nan'))]}
+        s=monitor.statistics(r,[],snapshots)
+        self.assertEqual([x['date'] for x in s['same']],['2026-10-16'])
+        self.assertIsNone(s['percentile'])
+
+    def test_beginner_explanation_uses_rules_and_handles_premium(self):
+        q=[dict(symbol=k,close=v,volume=1000,oi=2000) for k,v in
+           [('IC2611',6000),('IC2612',5950),('IC2703',6000)]]
+        r=compute(dt.date(2026,10,21),q,'IC')
+        text='\n'.join(x['text'] for x in monitor.learning_notes(r,[r]))
+        self.assertIn('远季价格高于近季',text)
+        self.assertIn('模拟',text)
+        self.assertIn('20,000',text)
+        self.assertIn('不能',text)
+
     def test_holiday_delivery_postponed(self):
         self.assertEqual(month_expiry('IC2606'),dt.date(2026,6,22))
         self.assertFalse(monitor.is_trading_day(dt.date(2026,6,19)))
