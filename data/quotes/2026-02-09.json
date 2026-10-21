@@ -1,0 +1,86 @@
+{
+  "date": "2026-02-09",
+  "quotes": [
+    {
+      "symbol": "IC2602",
+      "close": 8322.0,
+      "volume": 22324.0,
+      "oi": 30709.0,
+      "settlement": 8315.4,
+      "source_url": "http://www.cffex.com.cn/sj/hqsj/rtj/202602/09/index.xml",
+      "source_sha256": "eb879b5078f83b663206f599eb65116036f7d312c31f8f447cb594d7a034c146",
+      "fetched_at": "2026-10-21T16:19:23+08:00"
+    },
+    {
+      "symbol": "IC2603",
+      "close": 8311.6,
+      "volume": 76113.0,
+      "oi": 138576.0,
+      "settlement": 8302.2,
+      "source_url": "http://www.cffex.com.cn/sj/hqsj/rtj/202602/09/index.xml",
+      "source_sha256": "eb879b5078f83b663206f599eb65116036f7d312c31f8f447cb594d7a034c146",
+      "fetched_at": "2026-10-21T16:19:23+08:00"
+    },
+    {
+      "symbol": "IC2606",
+      "close": 8215.2,
+      "volume": 28444.0,
+      "oi": 96339.0,
+      "settlement": 8206.6,
+      "source_url": "http://www.cffex.com.cn/sj/hqsj/rtj/202602/09/index.xml",
+      "source_sha256": "eb879b5078f83b663206f599eb65116036f7d312c31f8f447cb594d7a034c146",
+      "fetched_at": "2026-10-21T16:19:23+08:00"
+    },
+    {
+      "symbol": "IC2609",
+      "close": 8095.2,
+      "volume": 9988.0,
+      "oi": 41362.0,
+      "settlement": 8088.8,
+      "source_url": "http://www.cffex.com.cn/sj/hqsj/rtj/202602/09/index.xml",
+      "source_sha256": "eb879b5078f83b663206f599eb65116036f7d312c31f8f447cb594d7a034c146",
+      "fetched_at": "2026-10-21T16:19:23+08:00"
+    },
+    {
+      "symbol": "IM2602",
+      "close": 8256.0,
+      "volume": 28961.0,
+      "oi": 45633.0,
+      "settlement": 8243.0,
+      "source_url": "http://www.cffex.com.cn/sj/hqsj/rtj/202602/09/index.xml",
+      "source_sha256": "eb879b5078f83b663206f599eb65116036f7d312c31f8f447cb594d7a034c146",
+      "fetched_at": "2026-10-21T16:19:23+08:00"
+    },
+    {
+      "symbol": "IM2603",
+      "close": 8232.6,
+      "volume": 112370.0,
+      "oi": 179169.0,
+      "settlement": 8216.6,
+      "source_url": "http://www.cffex.com.cn/sj/hqsj/rtj/202602/09/index.xml",
+      "source_sha256": "eb879b5078f83b663206f599eb65116036f7d312c31f8f447cb594d7a034c146",
+      "fetched_at": "2026-10-21T16:19:23+08:00"
+    },
+    {
+      "symbol": "IM2606",
+      "close": 8063.2,
+      "volume": 31900.0,
+      "oi": 107292.0,
+      "settlement": 8048.4,
+      "source_url": "http://www.cffex.com.cn/sj/hqsj/rtj/202602/09/index.xml",
+      "source_sha256": "eb879b5078f83b663206f599eb65116036f7d312c31f8f447cb594d7a034c146",
+      "fetched_at": "2026-10-21T16:19:23+08:00"
+    },
+    {
+      "symbol": "IM2609",
+      "close": 7890.2,
+      "volume": 13607.0,
+      "oi": 57020.0,
+      "settlement": 7868.4,
+      "source_url": "http://www.cffex.com.cn/sj/hqsj/rtj/202602/09/index.xml",
+      "source_sha256": "eb879b5078f83b663206f599eb65116036f7d312c31f8f447cb594d7a034c146",
+      "fetched_at": "2026-10-21T16:19:23+08:00"
+    }
+  ],
+  "schema": 1
+}
