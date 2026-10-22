@@ -8,5 +8,10 @@
     "status": "submitted",
     "at": "2026-10-21T23:33:55+08:00",
     "message_sha256": "fe343bd8a82bcc6f317b6f7a67dd6babc1786af57dd704abc2cd6c327ac9b012"
+  },
+  "2026-10-22": {
+    "status": "reserved",
+    "owner": "39806042056:1",
+    "at": "2026-10-22T23:57:17+08:00"
   }
 }
