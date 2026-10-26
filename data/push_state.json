@@ -18,5 +18,10 @@
     "status": "submitted",
     "at": "2026-10-23T23:26:36+08:00",
     "message_sha256": "d8dee9a185e1373b87dcdd62419383b436957b5639e28f7e720196bfedec4d2e"
+  },
+  "error:2026-10-27": {
+    "status": "reserved",
+    "owner": "40363903257:1",
+    "at": "2026-10-27T00:57:37+08:00"
   }
 }
