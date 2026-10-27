@@ -283,5 +283,111 @@ class TestReferenceBasisAndReservations(unittest.TestCase):
             monitor.notify('2026-10-21','body','SCT000SyntheticCredential')
             push.assert_called_once()
 
+class TestReportDateAndEmail(unittest.TestCase):
+    def test_report_date_tracks_latest_evening_session(self):
+        cases=[((2026,10,26,18,37),'2026-10-26'),((2026,10,27,0,56),'2026-10-26'),
+               ((2026,10,27,17,59),'2026-10-26'),((2026,10,27,18,0),'2026-10-27'),
+               ((2026,10,27,10,30),'2026-10-26'),((2026,10,24,1,0),'2026-10-23'),
+               ((2026,10,26,10,0),'2026-10-23'),((2026,10,5,19,0),'2026-09-30')]
+        for parts,want in cases:
+            with self.subTest(parts=parts):
+                self.assertEqual(monitor.report_date(dt.datetime(*parts,tzinfo=monitor.TZ)).isoformat(),want)
+
+    def test_slow_generation_rechecks_date_before_sending(self):
+        quotes=[dict(symbol=p+s,close=v,volume=1000,oi=2000) for p in ('IC','IM')
+                for s,v in [('2611',6000),('2612',5950),('2703',5800)]]
+        args=types.SimpleNamespace(date=None,backfill_days=0,no_push=False,backfill_only=False,
+                                   demo=False,refresh=False,channel='email')
+        with patch.object(monitor,'report_date',side_effect=[dt.date(2026,10,26),dt.date(2026,10,26),dt.date(2026,10,27)]), \
+             patch.object(monitor,'read_history',return_value=[]),patch.object(monitor,'load_quotes',return_value=quotes), \
+             patch.object(monitor,'write_history',side_effect=lambda old,new:old+new),patch.object(monitor,'atomic_json'), \
+             patch.object(monitor,'render_reports',return_value=('2026-10-26','report')), \
+             patch.dict(monitor.os.environ,{'SMTP_PASSWORD':'synthetic-password'}), \
+             patch.object(monitor,'notify') as notify,contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError,'交易日'):
+                monitor.run(args)
+            notify.assert_not_called()
+
+    def test_midnight_delayed_generation_does_not_request_future_close(self):
+        now=dt.datetime(2026,10,27,0,56,tzinfo=monitor.TZ)
+        quotes=[dict(symbol=p+s,close=v,volume=1000,oi=2000) for p in ('IC','IM')
+                for s,v in [('2611',6000),('2612',5950),('2703',5800)]]
+        args=types.SimpleNamespace(date=None,backfill_days=0,no_push=True,backfill_only=False,
+                                   demo=False,refresh=False)
+        def fetch(date):
+            if date>dt.date(2026,10,26):raise RuntimeError('close not available yet')
+            return quotes
+        with patch.object(monitor.dt,'datetime') as clock,patch.object(monitor,'read_history',return_value=[]), \
+             patch.object(monitor,'load_quotes',return_value=None),patch.object(monitor,'get_daily',side_effect=fetch) as source, \
+             patch.object(monitor,'cache_quotes'),patch.object(monitor,'write_history',side_effect=lambda old,new:old+new), \
+             patch.object(monitor,'atomic_json'),patch.object(monitor.time,'sleep'), \
+             patch.object(monitor,'render_reports',return_value=('2026-10-26','report')), \
+             contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+            clock.now.return_value=now
+            self.assertEqual(monitor.run(args),0)
+            self.assertEqual(max(call.args[0] for call in source.call_args_list),dt.date(2026,10,26))
+
+    def test_delayed_notification_accepts_target_and_rejects_stale_override(self):
+        history=[dict(date='2026-10-26',product=p) for p in ('IC','IM')]
+        env={'REPORT_DATE':'2026-10-26','SERVERCHAN_SENDKEY':'SCT000SyntheticCredential'}
+        with patch.object(monitor,'report_date',return_value=dt.date(2026,10,26)), \
+             patch.object(monitor,'read_history',return_value=history), \
+             patch.object(monitor.Path,'read_text',return_value='交易日：2026-10-26；test'), \
+             patch.dict(monitor.os.environ,env),patch.object(monitor,'notify') as notify:
+            monitor.send_existing_report()
+            self.assertEqual(notify.call_args.args[0],'2026-10-26')
+            for invalid in ('2026-10-23','2026-10-28'):
+                with patch.dict(monitor.os.environ,{'REPORT_DATE':invalid}):
+                    with self.assertRaisesRegex(ValueError,'交易日'):
+                        monitor.send_existing_report()
+            self.assertEqual(notify.call_count,1)
+
+    def test_notification_rechecks_after_loading_report(self):
+        env={'REPORT_DATE':'2026-10-26','SERVERCHAN_SENDKEY':'SCT000SyntheticCredential'}
+        with patch.object(monitor,'report_date',side_effect=[dt.date(2026,10,26),dt.date(2026,10,27)]), \
+             patch.object(monitor,'read_history',return_value=[dict(date='2026-10-26',product=p) for p in ('IC','IM')]), \
+             patch.object(monitor.Path,'read_text',return_value='交易日：2026-10-26；test'), \
+             patch.dict(monitor.os.environ,env),patch.object(monitor,'notify') as notify:
+            with self.assertRaisesRegex((ValueError,RuntimeError),'交易日'):
+                monitor.send_existing_report()
+            notify.assert_not_called()
+
+    def test_wechat_and_email_dedup_are_independent(self):
+        state={'2026-10-26':{'status':'submitted'}}
+        def save(path,new):
+            state.clear();state.update(__import__('copy').deepcopy(new))
+        with patch.object(monitor.Path,'exists',return_value=True), \
+             patch.object(monitor.Path,'read_text',side_effect=lambda **kwargs:monitor.json.dumps(state)), \
+             patch.object(monitor,'atomic_json',side_effect=save),patch.object(monitor,'push_email') as email, \
+             patch.dict(monitor.os.environ,{'SMTP_USERNAME':'sender@qq.com','MAIL_TO':'reader@qq.com'}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            monitor.notify('2026-10-26','body','synthetic-password',channel='email')
+            monitor.notify('2026-10-26','body','synthetic-password',channel='email')
+            email.assert_called_once()
+            self.assertEqual(state['email:2026-10-26']['status'],'submitted')
+            self.assertEqual(state['2026-10-26']['status'],'submitted')
+
+    def test_email_contains_plaintext_safe_html_and_inline_chart(self):
+        message=monitor.build_email('IC/IM 测试','交易日：2026-10-26；\n### IC\n<script>bad</script>',
+                                    'sender@qq.com','reader@qq.com',chart=b'fake png bytes')
+        self.assertIn('2026-10-26',message.get_body(preferencelist=('plain',)).get_content())
+        html=message.get_body(preferencelist=('html',)).get_content()
+        self.assertIn('&lt;script&gt;',html)
+        self.assertNotIn('<script>',html)
+        self.assertIn('cid:quarter-spread',html)
+        self.assertTrue(any(part.get_content_type()=='image/png' for part in message.walk()))
+
+    def test_smtp_errors_hide_credentials_and_recipient(self):
+        password='synthetic-secret-value'
+        with patch.dict(monitor.os.environ,{'SMTP_USERNAME':'sender@qq.com','MAIL_TO':'reader@qq.com'}), \
+             patch.object(monitor.smtplib,'SMTP_SSL') as smtp:
+            smtp.return_value.__enter__.return_value.login.side_effect=monitor.smtplib.SMTPAuthenticationError(
+                535,(password+' sender@qq.com reader@qq.com').encode())
+            with self.assertRaises(RuntimeError) as raised:
+                monitor.push_email('test','body',password)
+            self.assertIn('SMTPAuthenticationError',str(raised.exception))
+            for secret in [password,'sender@qq.com','reader@qq.com']:
+                self.assertNotIn(secret,str(raised.exception))
+
 if __name__ == '__main__':
     unittest.main()

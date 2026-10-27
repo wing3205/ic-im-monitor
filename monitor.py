@@ -4,6 +4,7 @@
 """
 import argparse
 import hashlib
+import html
 import json
 import contextlib
 import csv
@@ -13,7 +14,11 @@ import os
 from pathlib import Path
 import re
 import sys
+import smtplib
+import ssl
 import time
+from email.message import EmailMessage
+from email.utils import format_datetime, make_msgid
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -76,6 +81,33 @@ def expected_previous(date):
     date -= dt.timedelta(days=1)
     while not is_trading_day(date):
         date -= dt.timedelta(days=1)
+    return date
+
+
+def report_date(now=None):
+    """Latest eligible evening session, including a run delayed past midnight.
+
+    18:00 is a conservative publication cutoff, not a claim that the exchange
+    has already published a complete file. The normal completeness checks remain.
+    """
+    now = now if now is not None else dt.datetime.now(TZ)
+    if now.tzinfo is None:
+        raise ValueError('报告时钟必须包含时区')
+    now = now.astimezone(TZ)
+    date = now.date()
+    if (now.hour, now.minute) < (18, 0):
+        date -= dt.timedelta(days=1)
+    while not is_trading_day(date):
+        date -= dt.timedelta(days=1)
+    return date
+
+
+def notification_date():
+    expected = report_date()
+    explicit = os.getenv('REPORT_DATE', '').strip()
+    date = dt.date.fromisoformat(explicit) if explicit else expected
+    if date != expected:
+        raise ValueError('待发送交易日与当前可用报告交易日不一致，拒绝发送过期或未来报告')
     return date
 
 
@@ -461,6 +493,68 @@ def push(title, message, key):
     return result
 
 
+def mail_settings(password):
+    if not password:
+        raise ValueError('缺少 SMTP_PASSWORD，请将QQ邮箱授权码配置到GitHub Secret')
+    values = [os.getenv(name, '') for name in ('SMTP_USERNAME', 'MAIL_TO')]
+    if any(not re.fullmatch(r'[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', v)
+           or len(v) > 254 for v in values):
+        raise ValueError('SMTP_USERNAME 和 MAIL_TO 必须分别配置为单个有效邮箱地址')
+    return values
+
+
+def build_email(title, message, sender, recipient, chart=None):
+    mail = EmailMessage()
+    mail['Subject'] = title
+    mail['From'] = sender
+    mail['To'] = recipient
+    mail['Date'] = format_datetime(dt.datetime.now(TZ))
+    mail['Message-ID'] = make_msgid(domain='ic-im-monitor.local')
+    mail.set_content(message)
+    paragraphs = []
+    for line in message.splitlines():
+        if not line or line.startswith('!['):
+            continue
+        heading = line.startswith('### ')
+        text = html.escape(line[4:] if heading else line[2:] if line.startswith('- ') else line)
+        text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
+        tag = 'h3' if heading else 'p'
+        paragraphs.append(f'<{tag}>{text}</{tag}>')
+    url = publish_url(os.getenv('REPORT_BASE_URL', '').strip())
+    link = f'<p><a href="{html.escape(url, quote=True)}">打开完整历史报告</a></p>' if url else ''
+    image = '<img src="cid:quarter-spread" alt="IC/IM历史年化跨期价差" style="width:100%;max-width:900px">' if chart else ''
+    mail.add_alternative('<!doctype html><html lang="zh-CN"><body style="font:15px/1.7 sans-serif;color:#242b2b">'
+                         + f'<h2>{html.escape(title)}</h2>' + image + ''.join(paragraphs) + link
+                         + '</body></html>', subtype='html')
+    if chart:
+        mail.get_payload()[-1].add_related(chart, maintype='image', subtype='png',
+                                          cid='<quarter-spread>', disposition='inline', filename='quarter_spread.png')
+    return mail
+
+
+def push_email(title, message, password):
+    sender, recipient = mail_settings(password)
+    chart = CHART.read_bytes() if message.startswith('交易日：') else None
+    mail = build_email(title, message, sender, recipient, chart=chart)
+    try:
+        with smtplib.SMTP_SSL('smtp.qq.com', 465, timeout=25, context=ssl.create_default_context()) as smtp:
+            smtp.login(sender, password)
+            refused = smtp.send_message(mail, from_addr=sender, to_addrs=[recipient])
+            if refused:
+                raise smtplib.SMTPRecipientsRefused(refused)
+    except (smtplib.SMTPException, OSError, ValueError) as exc:
+        # SMTP response strings may echo credentials or mailbox addresses.
+        raise RuntimeError(f'邮件发送未确认成功（{type(exc).__name__}）；请核查SMTP设置与邮箱投递记录后再补发') from None
+    return {'code': 0}
+
+
+def notification_key(channel):
+    if channel not in ('wechat', 'email'):
+        raise ValueError('通知渠道只能是 wechat 或 email')
+    name = 'SMTP_PASSWORD' if channel == 'email' else 'SERVERCHAN_SENDKEY'
+    return os.getenv(name, '').strip()
+
+
 def publish_url(base_url):
     from urllib.parse import urlsplit
     if not base_url:
@@ -477,11 +571,16 @@ def notification_owner():
     return f'{run_id}:{attempt}' if run_id and attempt else ''
 
 
-def notify(date, message, key, retry=False, title=None, reserve_only=False, use_reservation=False):
+def notify(date, message, key, retry=False, title=None, reserve_only=False, use_reservation=False, channel='wechat'):
+    if channel not in ('wechat', 'email'):
+        raise ValueError('未知通知渠道')
     if not key:
-        raise ValueError('缺少 SERVERCHAN_SENDKEY')
+        raise ValueError('缺少 SMTP_PASSWORD' if channel == 'email' else '缺少 SERVERCHAN_SENDKEY')
+    if channel == 'email':
+        mail_settings(key)
+    state_key = 'email:' + date if channel == 'email' else date
     state = json.loads(PUSH_STATE.read_text(encoding='utf-8')) if PUSH_STATE.exists() else {}
-    old = state.get(date)
+    old = state.get(state_key)
     if old and old['status'] == 'submitted' and not retry:
         print(f'{date} 日报已提交，跳过重复推送')
         return
@@ -491,7 +590,7 @@ def notify(date, message, key, retry=False, title=None, reserve_only=False, use_
             raise ValueError('发送预留仅用于有运行标识的GitHub任务')
         if old and old['status'] in ('uncertain','reserved') and not retry:
             raise RuntimeError('上次发送预留或结果待核实，未自动重发；核对后显式重试')
-        state[date] = dict(status='reserved',owner=owner,at=dt.datetime.now(TZ).isoformat(timespec='seconds'))
+        state[state_key] = dict(status='reserved',owner=owner,at=dt.datetime.now(TZ).isoformat(timespec='seconds'))
         atomic_json(PUSH_STATE,state)
         print('发送预留已写入；云端必须成功写回仓库后才能调用推送')
         return
@@ -500,13 +599,15 @@ def notify(date, message, key, retry=False, title=None, reserve_only=False, use_
             raise RuntimeError('缺少属于本次运行的发送预留，拒绝推送')
     elif old and old['status'] in ('uncertain','reserved') and not retry:
         raise RuntimeError('上次推送结果待核实，未自动重发；核对微信和控制台后可使用 --retry-push')
-    state[date] = dict(status='uncertain',owner=owner,at=dt.datetime.now(TZ).isoformat(timespec='seconds'))
+    state[state_key] = dict(status='uncertain',owner=owner,at=dt.datetime.now(TZ).isoformat(timespec='seconds'))
     atomic_json(PUSH_STATE,state)
-    result = push(title or f'IC/IM 贴水日报 {date}', message, key)
-    state[date] = dict(status='submitted',at=dt.datetime.now(TZ).isoformat(timespec='seconds'),
+    submit = push_email if channel == 'email' else push
+    result = submit(title or f'IC/IM 贴水日报 {date}', message, key)
+    state[state_key] = dict(status='submitted',at=dt.datetime.now(TZ).isoformat(timespec='seconds'),
                        message_sha256=hashlib.sha256(message.encode()).hexdigest())
     atomic_json(PUSH_STATE,state)
-    print('日报已提交 Server酱；手机接收状态请在微信确认')
+    print('邮件已提交SMTP；是否投递到收件箱请在邮箱确认' if channel == 'email' else
+          '日报已提交 Server酱；手机接收状态请在微信确认')
     return result
 
 
@@ -571,7 +672,7 @@ def render_reports(history, requested_date, failures):
 
 
 def run(args):
-    today = dt.date.fromisoformat(args.date) if args.date else dt.datetime.now(TZ).date()
+    today = dt.date.fromisoformat(args.date) if args.date else report_date()
     if getattr(args, 'demo', False):
         quotes = [dict(symbol=p+s, close=v, volume=1000, oi=2000) for p in ('IC','IM')
                   for s,v in [('2611',6000),('2612',5950),('2703',5800)]]
@@ -580,9 +681,10 @@ def run(args):
         return 0
     backfill_only = getattr(args, 'backfill_only', False)
     no_push = args.no_push or backfill_only
-    key = os.getenv('SERVERCHAN_SENDKEY', '').strip()
-    if not no_push and today != dt.datetime.now(TZ).date():
-        raise ValueError('历史日期只能使用 --no-push 或 --backfill-only，防止误发为今日行情')
+    channel = getattr(args, 'channel', 'wechat')
+    key = notification_key(channel)
+    if not no_push and today != report_date():
+        raise ValueError('非当前可用报告交易日只能使用 --no-push 或 --backfill-only')
     existing = read_history()
     days = args.backfill_days if args.backfill_days else (0 if args.date else 14)
     if days < 0 or days > 1500:
@@ -617,7 +719,10 @@ def run(args):
                             successful=successful, failures=failures, calendar_unknown_years=unknown_years))
     if not existing:
         raise RuntimeError('没有有效历史数据；已保存诊断，请检查官方行情访问情况')
-    latest, message = render_reports(existing,today,failures)
+    eligible_history = [r for r in existing if r['date'] <= today.isoformat()]
+    if not eligible_history:
+        raise RuntimeError('目标交易日及此前没有有效历史，拒绝展示未来行情')
+    latest, message = render_reports(eligible_history,today,failures)
     print(message)
     current_ok = today.isoformat() in successful
     if backfill_only:
@@ -629,59 +734,65 @@ def run(args):
         raise RuntimeError('请求日缺少完整IC/IM行情：历史已保存，拒绝推送旧值')
     if not no_push:
         if not key:
-            raise ValueError('行情已保存，但缺少 SERVERCHAN_SENDKEY；不发送时请使用 --no-push')
-        notify(latest,message,key,retry=getattr(args,'retry_push',False))
+            raise ValueError('行情已保存，但缺少所选渠道凭证；不发送时请使用 --no-push')
+        if today != report_date() or latest != today.isoformat():
+            raise RuntimeError('生成过程中可用交易日已变化或正文日期不符，拒绝发送；请重新生成')
+        notify(latest,message,key,retry=getattr(args,'retry_push',False),channel=channel)
     return 0
 
 
-def send_existing_report(retry=False, reserve_only=False, use_reservation=False):
-    date = dt.datetime.now(TZ).date()
-    if not is_trading_day(date):
-        print('今日休市，不发送历史日报')
-        return 0
+def send_existing_report(retry=False, reserve_only=False, use_reservation=False, channel='wechat'):
+    date = notification_date()
     history = read_history()
     today_rows = [r for r in history if r['date'] == date.isoformat()]
     if {r['product'] for r in today_rows} != {'IC','IM'}:
-        raise RuntimeError('今天没有完整行情，拒绝发送历史报告')
+        raise RuntimeError('目标交易日没有完整行情，拒绝发送旧报告')
     path = BASE / 'output' / 'notification.md'
     message = path.read_text(encoding='utf-8')
     if not message.startswith(f'交易日：{date.isoformat()}；'):
-        raise RuntimeError('消息日期与今日不匹配，拒绝发送')
-    key = os.getenv('SERVERCHAN_SENDKEY','').strip()
-    if not key:
-        raise ValueError('缺少 SERVERCHAN_SENDKEY')
-    notify(date.isoformat(),message,key,retry=retry,reserve_only=reserve_only,use_reservation=use_reservation)
+        raise RuntimeError('消息日期与目标交易日不匹配，拒绝发送')
+    if notification_date() != date:
+        raise RuntimeError('读取报告期间可用交易日已变化，拒绝发送；请重新生成')
+    key = notification_key(channel)
+    notify(date.isoformat(),message,key,retry=retry,reserve_only=reserve_only,
+           use_reservation=use_reservation,channel=channel)
     return 0
 
 
-def send_failure_notice(retry=False, reserve_only=False, use_reservation=False):
+def send_failure_notice(retry=False, reserve_only=False, use_reservation=False, channel='wechat'):
     date = dt.datetime.now(TZ).date().isoformat()
-    key = os.getenv('SERVERCHAN_SENDKEY','').strip()
+    key = notification_key(channel)
     if not key:
-        raise ValueError('缺少 SERVERCHAN_SENDKEY，无法发异常提醒')
+        raise ValueError('缺少所选渠道凭证，无法发异常提醒')
     run_url = os.getenv('MONITOR_RUN_URL','').strip()
     suffix = f'\n\n[查看本次运行日志]({run_url})' if run_url.startswith('https://github.com/') else ''
-    message = '本次 IC/IM 日报流程未完整完成，可能涉及行情、报告发布或推送。请检查运行日志与微信接收状态；不要把旧报告当作今日更新。'+suffix
+    message = ('本次 IC/IM 日报流程未完整完成，可能涉及行情、报告发布或某一通知渠道。'
+               '其他渠道可能已成功提交；收到此提醒不表示所有渠道都失败。'
+               '请检查运行日志与各渠道接收状态；不要把旧报告当作今日更新。')+suffix
     notify('error:'+date,message,key,title=f'IC/IM 监控异常 {date}',retry=retry,
-           reserve_only=reserve_only,use_reservation=use_reservation)
+           reserve_only=reserve_only,use_reservation=use_reservation,channel=channel)
     return 0
 
 
-def send_test_notice(retry=False, reserve_only=False, use_reservation=False):
+def send_test_notice(retry=False, reserve_only=False, use_reservation=False, channel='wechat'):
     date=dt.datetime.now(TZ).date().isoformat()
-    key=os.getenv('SERVERCHAN_SENDKEY','').strip()
-    message='IC/IM 监控接入测试成功。此消息用于确认程序已提交微信推送，不含交易指令。每日行情将在工作日18:37后按交易日更新。'
+    key=notification_key(channel)
+    message=('IC/IM 邮件渠道接入测试，用于核验邮件投递。' if channel == 'email' else
+             'IC/IM 微信渠道接入测试，用于核验微信投递。')
+    message+='不含交易指令。日报按实际行情交易日期标注，工作日18:37计划更新，定时任务可能延迟。'
     url=publish_url(os.getenv('REPORT_BASE_URL','').strip())
     if url:
         message+=f'\n\n[查看行情报告]({url})'
-    notify('test:'+date,message,key,retry=retry,title='IC/IM 监控接入测试',
-           reserve_only=reserve_only,use_reservation=use_reservation)
+    notify('test:'+date,message,key,retry=retry,title='IC/IM 邮件接入测试' if channel == 'email' else 'IC/IM 监控接入测试',
+           reserve_only=reserve_only,use_reservation=use_reservation,channel=channel)
     return 0
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--date', help='指定日期 YYYY-MM-DD，历史日期禁止推送')
+    parser.add_argument('--date', help='指定日期 YYYY-MM-DD；仅最近可用晚间交易日允许发送')
+    parser.add_argument('--print-report-date', action='store_true', help='只输出最近可用晚间交易日，不采集也不发送')
+    parser.add_argument('--channel', choices=('wechat','email'), default='wechat', help='发送渠道，邮件使用QQ邮箱SMTP')
     parser.add_argument('--backfill-days', type=int, default=0, help='补录自然日数；日常运行自动核查近14天')
     parser.add_argument('--backfill-only', action='store_true', help='只补历史与出报告，结束日无需有行情，绝不推送')
     parser.add_argument('--no-push', action='store_true', help='下载、保存并生成报告，不发送')
@@ -696,6 +807,9 @@ def main():
     modes.add_argument('--failure-notice', action='store_true', help='只发送一次当日运行失败提醒')
     args=parser.parse_args()
     try:
+        if args.print_report_date:
+            print(report_date().isoformat())
+            return 0
         if args.no_push and (args.notify_only or args.failure_notice or args.test_notice):
             raise ValueError('--no-push 不能与发送专用模式同时使用')
         if (args.reserve_only or args.use_reservation) and not (args.notify_only or args.failure_notice or args.test_notice):
@@ -703,11 +817,11 @@ def main():
         if args.reserve_only and args.use_reservation:
             raise ValueError('不能同时创建和消费发送预留')
         if args.test_notice:
-            return send_test_notice(retry=args.retry_push,reserve_only=args.reserve_only,use_reservation=args.use_reservation)
+            return send_test_notice(retry=args.retry_push,reserve_only=args.reserve_only,use_reservation=args.use_reservation,channel=args.channel)
         if args.notify_only:
-            return send_existing_report(retry=args.retry_push,reserve_only=args.reserve_only,use_reservation=args.use_reservation)
+            return send_existing_report(retry=args.retry_push,reserve_only=args.reserve_only,use_reservation=args.use_reservation,channel=args.channel)
         if args.failure_notice:
-            return send_failure_notice(retry=args.retry_push,reserve_only=args.reserve_only,use_reservation=args.use_reservation)
+            return send_failure_notice(retry=args.retry_push,reserve_only=args.reserve_only,use_reservation=args.use_reservation,channel=args.channel)
         return run(args)
     except (RuntimeError, ValueError, OSError) as exc:
         print(f'失败：{exc}', file=sys.stderr)

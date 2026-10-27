@@ -31,8 +31,16 @@ on:
         description: '已核对接收状态，允许重发'
         type: boolean
         default: false
+      send_email:
+        description: '本次发送邮件日报（默认不发）'
+        type: boolean
+        default: false
+      test_email:
+        description: '发送一次邮件接入测试'
+        type: boolean
+        default: false
   schedule:
-    - cron: '37 18 * * 1-5'
+    - cron: '37 18,20,22 * * 1-5'
       timezone: Asia/Shanghai
 permissions:
   contents: read
@@ -45,6 +53,8 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
+    outputs:
+      report_date: ${{ steps.generate.outputs.report_date }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,7 +76,11 @@ jobs:
         run: |
           flags=()
           [[ "$REFRESH_DATA" != "true" ]] || flags+=(--refresh)
-          python monitor.py --no-push --backfill-days "$BACKFILL_DAYS" "${flags[@]}"
+          report_date=$(python monitor.py --print-report-date)
+          echo "report_date=$report_date" >> "$GITHUB_OUTPUT"
+          days=$BACKFILL_DAYS
+          [[ "$days" != "0" ]] || days=14
+          python monitor.py --no-push --date "$report_date" --backfill-days "$days" "${flags[@]}"
       - name: Persist data even if notification failed
         if: ${{ always() && steps.generate.outcome != 'skipped' }}
         run: |
@@ -117,36 +131,79 @@ jobs:
     if: >-
       ${{ always() && needs.report.result == 'success' &&
       (needs.pages.result == 'success' || needs.pages.result == 'skipped') &&
-      ((github.event_name == 'schedule' && vars.ENABLE_PUSH == 'true') ||
-      (github.event_name == 'workflow_dispatch' && (inputs.send_message || inputs.test_connection))) }}
+      ((github.event_name == 'schedule' && (vars.ENABLE_PUSH == 'true' || vars.ENABLE_EMAIL == 'true')) ||
+      (github.event_name == 'workflow_dispatch' && (inputs.send_message || inputs.test_connection || inputs.send_email || inputs.test_email))) }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        channel: [wechat, email]
     permissions:
       contents: write
+    env:
+      CHANNEL: ${{ matrix.channel }}
+      REPORT_DATE: ${{ needs.report.outputs.report_date }}
+      REPORT_BASE_URL: ${{ vars.REPORT_BASE_URL }}
+      SERVERCHAN_SENDKEY: ${{ matrix.channel == 'wechat' && secrets.SERVERCHAN_SENDKEY || '' }}
+      SMTP_PASSWORD: ${{ matrix.channel == 'email' && secrets.SMTP_PASSWORD || '' }}
+      SMTP_USERNAME: ${{ matrix.channel == 'email' && secrets.SMTP_USERNAME || '' }}
+      MAIL_TO: ${{ matrix.channel == 'email' && secrets.MAIL_TO || '' }}
     steps:
+      - name: Select explicitly enabled channel
+        id: selection
+        env:
+          ENABLE_WECHAT: ${{ vars.ENABLE_PUSH }}
+          ENABLE_EMAIL: ${{ vars.ENABLE_EMAIL }}
+          SEND_WECHAT: ${{ inputs.send_message }}
+          TEST_WECHAT: ${{ inputs.test_connection }}
+          SEND_EMAIL: ${{ inputs.send_email }}
+          TEST_EMAIL: ${{ inputs.test_email }}
+        shell: bash
+        run: |
+          enabled=false
+          mode=--notify-only
+          if [[ "$CHANNEL" == "email" ]]; then
+            configured=$ENABLE_EMAIL
+            requested=$SEND_EMAIL
+            test=$TEST_EMAIL
+          else
+            configured=$ENABLE_WECHAT
+            requested=$SEND_WECHAT
+            test=$TEST_WECHAT
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$configured" == "true" ]] ||
+             [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && ( "$requested" == "true" || "$test" == "true" ) ]]; then
+            enabled=true
+          fi
+          [[ "$test" != "true" ]] || mode=--test-notice
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
+        if: steps.selection.outputs.enabled == 'true'
         with:
           ref: ${{ github.ref_name }}
       - uses: actions/setup-python@v5
+        if: steps.selection.outputs.enabled == 'true'
         with:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
+        if: steps.selection.outputs.enabled == 'true'
         with:
           name: ic-im-report
           path: .
       - name: Reserve submission without sending
+        if: steps.selection.outputs.enabled == 'true'
         env:
-          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
-          REPORT_BASE_URL: ${{ vars.REPORT_BASE_URL }}
           RETRY_PUSH: ${{ inputs.retry_push }}
-          TEST_CONNECTION: ${{ inputs.test_connection }}
+          NOTICE_MODE: ${{ steps.selection.outputs.mode }}
         shell: bash
         run: |
           flags=()
           [[ "$RETRY_PUSH" != "true" ]] || flags+=(--retry-push)
-          mode=--notify-only
-          [[ "$TEST_CONNECTION" != "true" ]] || mode=--test-notice
-          python monitor.py "$mode" --reserve-only "${flags[@]}"
+          python monitor.py "$NOTICE_MODE" --channel "$CHANNEL" --reserve-only "${flags[@]}"
       - name: Durably save reservation before API call
+        if: steps.selection.outputs.enabled == 'true'
         run: |
           git config user.name 'ic-monitor-bot'
           git config user.email 'ic-monitor-bot@users.noreply.github.com'
@@ -156,17 +213,14 @@ jobs:
             git push
           fi
       - name: Submit today's report after publication
+        if: steps.selection.outputs.enabled == 'true'
         env:
-          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
-          REPORT_BASE_URL: ${{ vars.REPORT_BASE_URL }}
-          TEST_CONNECTION: ${{ inputs.test_connection }}
+          NOTICE_MODE: ${{ steps.selection.outputs.mode }}
         shell: bash
         run: |
-          mode=--notify-only
-          [[ "$TEST_CONNECTION" != "true" ]] || mode=--test-notice
-          python monitor.py "$mode" --use-reservation
+          python monitor.py "$NOTICE_MODE" --channel "$CHANNEL" --use-reservation
       - name: Persist notification state on success or failure
-        if: always()
+        if: ${{ always() && steps.selection.outputs.enabled == 'true' }}
         run: |
           git config user.name 'ic-monitor-bot'
           git config user.email 'ic-monitor-bot@users.noreply.github.com'
@@ -180,24 +234,63 @@ jobs:
     if: >-
       ${{ always() &&
       (needs.report.result == 'failure' || needs.pages.result == 'failure' || needs.notify.result == 'failure') &&
-      ((github.event_name == 'schedule' && vars.ENABLE_PUSH == 'true') ||
-      (github.event_name == 'workflow_dispatch' && (inputs.send_message || inputs.test_connection))) }}
+      ((github.event_name == 'schedule' && (vars.ENABLE_PUSH == 'true' || vars.ENABLE_EMAIL == 'true')) ||
+      (github.event_name == 'workflow_dispatch' && (inputs.send_message || inputs.test_connection || inputs.send_email || inputs.test_email))) }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        channel: [wechat, email]
     permissions:
       contents: write
+    env:
+      CHANNEL: ${{ matrix.channel }}
+      REPORT_BASE_URL: ${{ vars.REPORT_BASE_URL }}
+      SERVERCHAN_SENDKEY: ${{ matrix.channel == 'wechat' && secrets.SERVERCHAN_SENDKEY || '' }}
+      SMTP_PASSWORD: ${{ matrix.channel == 'email' && secrets.SMTP_PASSWORD || '' }}
+      SMTP_USERNAME: ${{ matrix.channel == 'email' && secrets.SMTP_USERNAME || '' }}
+      MAIL_TO: ${{ matrix.channel == 'email' && secrets.MAIL_TO || '' }}
     steps:
+      - name: Select explicitly enabled alert channel
+        id: selection
+        env:
+          ENABLE_WECHAT: ${{ vars.ENABLE_PUSH }}
+          ENABLE_EMAIL: ${{ vars.ENABLE_EMAIL }}
+          SEND_WECHAT: ${{ inputs.send_message }}
+          TEST_WECHAT: ${{ inputs.test_connection }}
+          SEND_EMAIL: ${{ inputs.send_email }}
+          TEST_EMAIL: ${{ inputs.test_email }}
+        shell: bash
+        run: |
+          enabled=false
+          if [[ "$CHANNEL" == "email" ]]; then
+            configured=$ENABLE_EMAIL
+            requested=$SEND_EMAIL
+            test=$TEST_EMAIL
+          else
+            configured=$ENABLE_WECHAT
+            requested=$SEND_WECHAT
+            test=$TEST_WECHAT
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" && "$configured" == "true" ]] ||
+             [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && ( "$requested" == "true" || "$test" == "true" ) ]]; then
+            enabled=true
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
+        if: steps.selection.outputs.enabled == 'true'
         with:
           ref: ${{ github.ref_name }}
       - uses: actions/setup-python@v5
+        if: steps.selection.outputs.enabled == 'true'
         with:
           python-version: '3.12'
       - name: Reserve failure alert without sending
-        env:
-          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
-          REPORT_BASE_URL: ${{ vars.REPORT_BASE_URL }}
-        run: python monitor.py --failure-notice --reserve-only
+        if: steps.selection.outputs.enabled == 'true'
+        run: python monitor.py --failure-notice --channel "$CHANNEL" --reserve-only
       - name: Durably save alert reservation before API call
+        if: steps.selection.outputs.enabled == 'true'
         run: |
           git config user.name 'ic-monitor-bot'
           git config user.email 'ic-monitor-bot@users.noreply.github.com'
@@ -207,13 +300,12 @@ jobs:
             git push
           fi
       - name: Send one daily failure alert
+        if: steps.selection.outputs.enabled == 'true'
         env:
-          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
-          REPORT_BASE_URL: ${{ vars.REPORT_BASE_URL }}
           MONITOR_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: python monitor.py --failure-notice --use-reservation
+        run: python monitor.py --failure-notice --channel "$CHANNEL" --use-reservation
       - name: Persist alert state
-        if: always()
+        if: ${{ always() && steps.selection.outputs.enabled == 'true' }}
         run: |
           git config user.name 'ic-monitor-bot'
           git config user.email 'ic-monitor-bot@users.noreply.github.com'
