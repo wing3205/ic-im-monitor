@@ -25,8 +25,8 @@
     "message_sha256": "ec9e846c8c0afe60a3cb37c8c794e7df8d2c4067f3b6f8605bab5e1e47e1bdd9"
   },
   "email:2026-10-26": {
-    "status": "reserved",
-    "owner": "40443621891:1",
-    "at": "2026-10-27T11:22:16+08:00"
+    "status": "submitted",
+    "at": "2026-10-27T11:22:21+08:00",
+    "message_sha256": "bf77419e3caeed1ac08772858762bb513a866988492112b444b57d963caa47c6"
   }
 }
