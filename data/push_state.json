@@ -40,8 +40,8 @@
     "message_sha256": "f6f497c0edd7e77662f1364508d238f8bafae487dcabe8224a4e70e281a26e0d"
   },
   "2026-10-28": {
-    "status": "reserved",
-    "owner": "40729607056:1",
-    "at": "2026-10-29T00:50:04+08:00"
+    "status": "submitted",
+    "at": "2026-10-29T00:50:08+08:00",
+    "message_sha256": "dce2b1b6cda3fb54e2547a5ee0fc7b6e4770fd8d7c1d223641d72637acef64d1"
   }
 }
