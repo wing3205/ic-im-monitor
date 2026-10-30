@@ -60,8 +60,8 @@
     "message_sha256": "5fc2121dae47d836dfba6f46d6196b6899122e429a6876120f7cc991e870c729"
   },
   "2026-10-30": {
-    "status": "reserved",
-    "owner": "41093284107:1",
-    "at": "2026-10-31T00:50:26+08:00"
+    "status": "submitted",
+    "at": "2026-10-31T00:50:29+08:00",
+    "message_sha256": "9463b2f1088030298a2aba603abca3774138dbaa1ce72d144adaafb105a42b6f"
   }
 }
