@@ -63,5 +63,10 @@
     "status": "submitted",
     "at": "2026-10-31T00:50:29+08:00",
     "message_sha256": "9463b2f1088030298a2aba603abca3774138dbaa1ce72d144adaafb105a42b6f"
+  },
+  "email:2026-10-30": {
+    "status": "reserved",
+    "owner": "41093284107:1",
+    "at": "2026-10-31T00:50:39+08:00"
   }
 }
