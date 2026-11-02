@@ -70,8 +70,8 @@
     "message_sha256": "9463b2f1088030298a2aba603abca3774138dbaa1ce72d144adaafb105a42b6f"
   },
   "2026-11-02": {
-    "status": "reserved",
-    "owner": "41519686225:1",
-    "at": "2026-11-03T04:31:26+08:00"
+    "status": "submitted",
+    "at": "2026-11-03T04:31:30+08:00",
+    "message_sha256": "d0a4e7c882e2d02ed5f6176f020d84f5735857e4204948a1a9c79f5547e06825"
   }
 }
