@@ -68,5 +68,10 @@
     "status": "submitted",
     "at": "2026-10-31T00:50:44+08:00",
     "message_sha256": "9463b2f1088030298a2aba603abca3774138dbaa1ce72d144adaafb105a42b6f"
+  },
+  "2026-11-02": {
+    "status": "reserved",
+    "owner": "41519686225:1",
+    "at": "2026-11-03T04:31:26+08:00"
   }
 }
