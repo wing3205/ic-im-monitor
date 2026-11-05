@@ -105,8 +105,8 @@
     "message_sha256": "3cd482cdedf005ee25947ef42bd79bd0508bb775ebadf35263b93dabe78738cc"
   },
   "email:2026-11-05": {
-    "status": "reserved",
-    "owner": "42082481652:1",
-    "at": "2026-11-06T02:17:27+08:00"
+    "status": "submitted",
+    "at": "2026-11-06T02:17:32+08:00",
+    "message_sha256": "3cd482cdedf005ee25947ef42bd79bd0508bb775ebadf35263b93dabe78738cc"
   }
 }
