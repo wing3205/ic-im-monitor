@@ -123,5 +123,10 @@
     "status": "submitted",
     "at": "2026-11-10T05:03:57+08:00",
     "message_sha256": "568a67dc5fcd1c4bbec30e8d95f317df11eecc0b0ab664e457e898b6c9a3fc17"
+  },
+  "email:2026-11-09": {
+    "status": "reserved",
+    "owner": "42698576828:1",
+    "at": "2026-11-10T05:04:05+08:00"
   }
 }
