@@ -155,8 +155,8 @@
     "message_sha256": "56ef6b64d76d4e88175d5d85dbe89391afc80573871dd18a1940e6e9a9840dd6"
   },
   "email:2026-11-12": {
-    "status": "reserved",
-    "owner": "43281204757:1",
-    "at": "2026-11-13T02:35:53+08:00"
+    "status": "submitted",
+    "at": "2026-11-13T02:35:59+08:00",
+    "message_sha256": "56ef6b64d76d4e88175d5d85dbe89391afc80573871dd18a1940e6e9a9840dd6"
   }
 }
