@@ -160,8 +160,8 @@
     "message_sha256": "56ef6b64d76d4e88175d5d85dbe89391afc80573871dd18a1940e6e9a9840dd6"
   },
   "2026-11-13": {
-    "status": "reserved",
-    "owner": "43478506648:1",
-    "at": "2026-11-14T02:02:54+08:00"
+    "status": "submitted",
+    "at": "2026-11-14T02:02:58+08:00",
+    "message_sha256": "10b2a4ab598dbc98850e63890c1936cbbf3147e42f1b24244a7846d8f6dca47a"
   }
 }
