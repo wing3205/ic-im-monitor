@@ -185,8 +185,8 @@
     "message_sha256": "b26cf938a7a0bc1c633521d9a859c6c62987e081d652b969cc04de0989685fc5"
   },
   "email:2026-11-17": {
-    "status": "reserved",
-    "owner": "44157659137:1",
-    "at": "2026-11-18T03:22:55+08:00"
+    "status": "submitted",
+    "at": "2026-11-18T03:23:02+08:00",
+    "message_sha256": "b26cf938a7a0bc1c633521d9a859c6c62987e081d652b969cc04de0989685fc5"
   }
 }
