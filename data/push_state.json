@@ -200,8 +200,8 @@
     "message_sha256": "c9ce58c215c1662ee2fdd85a77dc2db1099423bcb457d7f2d3e285e69015fb94"
   },
   "2026-11-19": {
-    "status": "reserved",
-    "owner": "44595185460:1",
-    "at": "2026-11-20T03:09:52+08:00"
+    "status": "submitted",
+    "at": "2026-11-20T03:09:55+08:00",
+    "message_sha256": "65b111c8955eca163b3bbd2a85e995042d9de2d9b4e73165f499814ca2c9d9f5"
   }
 }
