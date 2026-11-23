@@ -225,8 +225,8 @@
     "message_sha256": "d6b2839a49373adeb3d43e6301de99104300dfa9da99ffdd1451a5c77175df15"
   },
   "email:error:2026-11-24": {
-    "status": "reserved",
-    "owner": "45277420994:1",
-    "at": "2026-11-24T06:14:02+08:00"
+    "status": "submitted",
+    "at": "2026-11-24T06:14:06+08:00",
+    "message_sha256": "d6b2839a49373adeb3d43e6301de99104300dfa9da99ffdd1451a5c77175df15"
   }
 }
