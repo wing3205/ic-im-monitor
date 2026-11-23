@@ -220,8 +220,8 @@
     "message_sha256": "7cb0629385e23cd7090da416b87fdb81e19f28788105f9f11fe2160d37409a06"
   },
   "error:2026-11-24": {
-    "status": "reserved",
-    "owner": "45277420994:1",
-    "at": "2026-11-24T06:13:48+08:00"
+    "status": "submitted",
+    "at": "2026-11-24T06:13:51+08:00",
+    "message_sha256": "d6b2839a49373adeb3d43e6301de99104300dfa9da99ffdd1451a5c77175df15"
   }
 }
