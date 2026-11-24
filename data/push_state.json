@@ -230,8 +230,8 @@
     "message_sha256": "d6b2839a49373adeb3d43e6301de99104300dfa9da99ffdd1451a5c77175df15"
   },
   "error:2026-11-25": {
-    "status": "reserved",
-    "owner": "45485046651:1",
-    "at": "2026-11-25T04:52:29+08:00"
+    "status": "submitted",
+    "at": "2026-11-25T04:52:32+08:00",
+    "message_sha256": "4c370fe34700bd6b1e87bef5dc400282f87f1213e22f837b3ef000176ac211a2"
   }
 }
