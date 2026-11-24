@@ -233,5 +233,10 @@
     "status": "submitted",
     "at": "2026-11-25T04:52:32+08:00",
     "message_sha256": "4c370fe34700bd6b1e87bef5dc400282f87f1213e22f837b3ef000176ac211a2"
+  },
+  "email:error:2026-11-25": {
+    "status": "reserved",
+    "owner": "45485046651:1",
+    "at": "2026-11-25T04:52:42+08:00"
   }
 }
