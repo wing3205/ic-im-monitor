@@ -245,8 +245,8 @@
     "message_sha256": "1a51dff497fa7f8db910253e8e227a2c68bb3065c871aecbc92cbd646271ab81"
   },
   "email:error:2026-11-26": {
-    "status": "reserved",
-    "owner": "45692061232:1",
-    "at": "2026-11-26T04:10:20+08:00"
+    "status": "submitted",
+    "at": "2026-11-26T04:10:24+08:00",
+    "message_sha256": "1a51dff497fa7f8db910253e8e227a2c68bb3065c871aecbc92cbd646271ab81"
   }
 }
