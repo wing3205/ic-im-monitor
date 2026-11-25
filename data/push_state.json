@@ -240,8 +240,8 @@
     "message_sha256": "4c370fe34700bd6b1e87bef5dc400282f87f1213e22f837b3ef000176ac211a2"
   },
   "error:2026-11-26": {
-    "status": "reserved",
-    "owner": "45692061232:1",
-    "at": "2026-11-26T04:10:06+08:00"
+    "status": "submitted",
+    "at": "2026-11-26T04:10:10+08:00",
+    "message_sha256": "1a51dff497fa7f8db910253e8e227a2c68bb3065c871aecbc92cbd646271ab81"
   }
 }
